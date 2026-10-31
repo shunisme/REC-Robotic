@@ -2,7 +2,7 @@
 #include <Bluepad32.h>
 
 // --- PIN DEFINITIONS (Matching your schematic) ---
-const int IN1 = 16;  
+const int IN1 = 18;  
 const int IN2 = 17;  
 const int IN3 = 19;  
 const int IN4 = 21;  

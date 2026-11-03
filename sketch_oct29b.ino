@@ -1,31 +1,42 @@
 #include <ESP32Servo.h>
 #include <Bluepad32.h>
 
-// --- PIN DEFINITIONS (Matching your schematic) ---
-const int IN1 = 18;  
-const int IN2 = 17;  
-const int IN3 = 19;  
-const int IN4 = 21;  
+// pin
+const int IN1 = 16;  //M1
+const int IN2 = 17;  //M1  
+const int IN3 = 19;  //M2
+const int IN4 = 21;  //M2
 
-const int ENA = 18;
-const int ENB = 22;
+const int ENA = 18; //M1 PWM
+const int ENB = 22; //M2 PWM
 
 const int SERVO1_PIN = 33; 
 const int SERVO2_PIN = 32; 
 
-const int ANGLE_OPEN = 10;
-const int ANGLE_CLOSE = 90;
+// Battery Monitoring
+const int BATTERY_PIN = 34; // Must be an ADC1 pin
+unsigned long lastBatteryCheck = 0;
+
+const float R1 = 27000.0; // Connected to positive
+const float R2 = 10000.0; // Connected to gnd
+const float VOLTAGE_MULTIPLIER = (R1 + R2) / R2;
+
+const float VALUE_MAX = 8400.0;
+const float VALUE_MIN = 6400.0; 
+
+// manual claw config
+const int CLAW_MIN_LIMIT = 10;   
+const int CLAW_MAX_LIMIT = 110;  
+const int STEP_SIZE = 2;         
+int currentClawAngle = 10; 
 
 Servo gripper1;
 Servo gripper2;
-
-// Controller instance pointer
 GamepadPtr myGamepad = nullptr;
 
 void setup() {
   Serial.begin(115200);
 
-  // Initialize Motor Pins
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT);
@@ -36,29 +47,26 @@ void setup() {
   digitalWrite(ENA, HIGH);
   digitalWrite(ENB, HIGH);
 
-  // Initialize Servos
   gripper1.attach(SERVO1_PIN);
   gripper2.attach(SERVO2_PIN);
-  openGripper();
+  updateGripper(currentClawAngle);
 
-  // Initialize Bluepad32 for ESP32 Bluetooth controllers
-  BP32.setup();
+  BP32.setup(&onConnectedGamepad, &onDisconnectedGamepad);
   BP32.enableVirtualDevice(false);
 }
 
 void loop() {
-  // Update the controller states
-  bool dataUpdated = BP32.update();
-  if (dataUpdated && myGamepad && myGamepad->isConnected()) {
+  BP32.update();
+  if (myGamepad && myGamepad->isConnected()) {
     processGamepadInput();
   } else {
-    // If controller disconnects, stop the robot for safety
     stopRobot();
   }
-  delay(20); // Small loop delay
+
+  checkBattery();
+  delay(20); 
 }
 
-// Callback when controller connects
 void onConnectedGamepad(GamepadPtr gp) {
   if (!myGamepad) {
     myGamepad = gp;
@@ -66,7 +74,6 @@ void onConnectedGamepad(GamepadPtr gp) {
   }
 }
 
-// Callback when controller disconnects
 void onDisconnectedGamepad(GamepadPtr gp) {
   if (myGamepad == gp) {
     myGamepad = nullptr;
@@ -76,85 +83,57 @@ void onDisconnectedGamepad(GamepadPtr gp) {
 }
 
 void processGamepadInput() {
-  // Read joystick values (axis typically ranges from -511 to 512 or -128 to 127 depending on library)
-  int axisY = myGamepad->axisY(); // Left stick vertical (forward/backward)
-  int axisX = myGamepad->axisX(); // Left stick horizontal (turning)
+  int axisY = myGamepad->axisY(); 
+  int axisX = myGamepad->axisX(); 
 
-  // Simple threshold / deadzone to prevent drifting
-  if (axisY < -50) {
-    moveForward();
-  } else if (axisY > 50) {
-    moveBackward();
-  } else if (axisX > 50) {
-    turnRight();
-  } else if (axisX < -50) {
-    turnLeft();
-  } else {
-    stopRobot();
-  }
+  if (axisY < -50) moveForward();
+  else if (axisY > 50) moveBackward();
+  else if (axisX > 50) turnRight();
+  else if (axisX < -50) turnLeft();
+  else stopRobot();
 
-  // Button controls for Gripper (e.g., Cross/A button to close, Circle/B button to open)
-  if (myGamepad->a() || myGamepad->b()) { 
-    closeGripper();
-  } else {
-    openGripper();
+  if (myGamepad->a()) {
+    currentClawAngle += STEP_SIZE; 
+    updateGripper(currentClawAngle);
+    delay(50); 
+  } else if (myGamepad->b()) {
+    currentClawAngle -= STEP_SIZE; 
+    updateGripper(currentClawAngle);
+    delay(50);
   }
 }
 
-// ==========================================
-// REUSABLE LOCOMOTION FUNCTIONS
-// ==========================================
-void moveForward() {
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
-  *Verification:* Both motors spin forward when joystick is pushed up.
+void checkBattery() {
+  if (millis() - lastBatteryCheck > 5000) {
+    lastBatteryCheck = millis();
+
+    uint32_t pinMv = analogReadMilliVolts(BATTERY_PIN);
+    float actualMv = pinMv * VOLTAGE_MULTIPLIER;
+    
+    float batteryPct = ((actualMv - VALUE_MIN) / (VALUE_MAX - VALUE_MIN)) * 100.0;
+    batteryPct = constrain(batteryPct, 0.0, 100.0);
+
+    Serial.print("Battery Level: ");
+    Serial.print(batteryPct, 0);
+    Serial.println("%");
+
+    if (batteryPct < 50.0) {
+      Serial.println("WARNING: Battery below 50% - Swap Soon!");
+    }
+  }
 }
 
-void moveBackward() {
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
-  *Verification:* Both motors spin in reverse when joystick is pulled down.
+void moveForward() { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); }
+void moveBackward() { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); }
+void turnLeft() { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); }
+void turnRight() { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); }
+void stopRobot() { digitalWrite(IN1, LOW); digitalWrite(IN2, LOW); digitalWrite(IN3, LOW); digitalWrite(IN4, LOW); }
+
+void updateGripper(int targetAngle) {
+  int safeAngle = constrain(targetAngle, CLAW_MIN_LIMIT, CLAW_MAX_LIMIT);
+  currentClawAngle = safeAngle; 
+  gripper1.write(safeAngle);
+  gripper2.write(safeAngle);
 }
 
-void turnLeft() {
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
-  *Verification:* Robot pivots left when left stick is pushed left.
-}
 
-void turnRight() {
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
-  *Verification:* Robot pivots right when left stick is pushed right.
-}
-
-void stopRobot() {
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, LOW);
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, LOW);
-  *Verification:* Motors halt when joysticks are centered.
-}
-
-// ==========================================
-// REUSABLE GRIPPING FUNCTIONS
-// ==========================================
-void openGripper() {
-  gripper1.write(ANGLE_OPEN);
-  gripper2.write(ANGLE_OPEN);
-  *Verification:* Servos move to open position.
-}
-
-void closeGripper() {
-  gripper1.write(ANGLE_CLOSE);
-  gripper2.write(ANGLE_CLOSE);
-  *Verification:* Servos clamp down.
-}

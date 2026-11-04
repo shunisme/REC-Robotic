@@ -139,6 +139,11 @@ void onDisconnectedGamepad(GamepadPtr gp) {
 }
 
 int toDuty(int v) { return map(constrain(abs(v), 50, 512), 50, 512, 90, 255); }
+void setMotor(int a, int b, int en, int spd) {
+  digitalWrite(a, spd > 0);
+  digitalWrite(b, spd < 0);
+  ledcWrite(en, abs(spd) < 50 ? 0 : toDuty(spd));
+}
 void setSpeed(int d) { ledcWrite(ENA, d); ledcWrite(ENB, d); }
 
 // ================= INVERSE KINEMATICS =================
@@ -202,11 +207,12 @@ void processGamepadInput() {
   int axisY = myGamepad->axisY();
   int axisX = myGamepad->axisX();
 
-  if      (axisY < -50) { moveForward();  setSpeed(toDuty(axisY)); }
-  else if (axisY >  50) { moveBackward(); setSpeed(toDuty(axisY)); }
-  else if (axisX >  50) { turnRight();    setSpeed(toDuty(axisX)); }
-  else if (axisX < -50) { turnLeft();     setSpeed(toDuty(axisX)); }
-  else                  { stopRobot();    setSpeed(0); }
+  int drive = -axisY;                       // stick up = forward
+  int turn  = axisX * 0.7;                  // 0.7 = gentler turning
+  if (abs(drive) < 50) drive = 0;
+  if (abs(turn)  < 50) turn  = 0;
+  setMotor(IN1, IN2, ENA, constrain(drive + turn, -512, 512)); // left
+  setMotor(IN3, IN4, ENB, constrain(drive - turn, -512, 512)); // right
 
   processArm();
 
